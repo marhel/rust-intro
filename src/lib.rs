@@ -2,8 +2,7 @@ pub mod constants;
 
 struct Motherboard<'a> {
     ipe: InterruptPriorityEncoder<'a>,
-    mask: u8,
-    vector: u8
+    core: Core,
 }
 
 struct Core {
@@ -11,14 +10,12 @@ struct Core {
     vector: u8
 }
 
-impl<'a> Motherboard<'a> {
-    fn interrupt_requested_from(&mut self, p: &'a Peripheral)
-    {
-        self.ipe.assert_interrupt(p);
-        let prio = self.ipe.highest_priority;
+impl Core {
+    fn process_interrupt(&mut self, ipe: &mut InterruptPriorityEncoder) {
+        let prio = ipe.highest_priority;
         if prio > self.mask {            
-            self.vector = self.ipe.acknowledge_interrupt(prio);
-        }
+            self.vector = ipe.acknowledge_interrupt(prio);
+        }        
     }
 }
 
@@ -28,20 +25,26 @@ struct InterruptPriorityEncoder<'a>
     asserted: [Option<&'a Peripheral>; 7]
 }
 
+fn priority_to_index(priority: u8) -> usize {
+    7 - priority as usize
+}
+
 impl<'a> InterruptPriorityEncoder<'a> {
-    fn assert_interrupt(&mut self, p: &'a Peripheral)
+    fn update_asserted(&mut self, index: usize, value: Option<&'a Peripheral>) -> u8 {
+        self.asserted[index] = value;
+        self.highest_priority = self.asserted.iter().position(|&x| x.is_some()).map(|i| 7-i as u8).unwrap_or(0u8);
+        self.highest_priority
+    }
+    fn assert_interrupt(&mut self, p: &'a Peripheral) -> u8
     {
-        self.asserted[7 - p.priority as usize] = Some(p);
-        //self.highest_priority = self.asserted.iter().filter_map(|&x| x).map(|x| x.priority).max().unwrap_or(0u8);
-        self.highest_priority = self.asserted.iter().enumerate().find(|&(i, &x)| x.is_some()).map(|(i, &x)| 7-i as u8).unwrap_or(0u8);
+        self.update_asserted(priority_to_index(p.priority), Some(p))
     }
     fn acknowledge_interrupt(&mut self, priority: u8) -> u8 {
-        let ip = 7 - priority as usize;
+        let ip = priority_to_index(priority);
         match self.asserted[ip] {
             None => 0x18, // spurious interrupt
             Some(peripheral) => {
-                self.asserted[ip] = None;
-                self.highest_priority = self.asserted.iter().enumerate().find(|&(i, &x)| x.is_some()).map(|(i, &x)| 7-i as u8).unwrap_or(0u8);
+                self.update_asserted(ip, None);
                 peripheral.vector
             }
         }
@@ -56,19 +59,36 @@ struct Peripheral
 
 #[cfg(test)]
 mod tests {
-    use super::{Motherboard, InterruptPriorityEncoder, Peripheral};
+    use super::{Motherboard, Core, InterruptPriorityEncoder, Peripheral};
     #[test]
-    fn highest_priority_is_set() {
-        println!("Hello");
+    fn highest_priority_is_processed_first() {
+        let rtc = Peripheral { priority : 7, vector: 12 };
         let disk = Peripheral { priority : 5, vector: 15 };
         let keyboard = Peripheral { priority : 2, vector: 17 };
+
         let ipe = InterruptPriorityEncoder {
             highest_priority: 0, 
             asserted: [None, None, None, None, None, None, None]
         };
-        let mut board = Motherboard { mask: 0, ipe: ipe, vector: 0 };
-        board.ipe.assert_interrupt(&disk);
+        let core = Core { mask: 0, vector: 0 };
+        let mut board = Motherboard { ipe: ipe, core: core };
+
+        board.ipe.assert_interrupt(&rtc);
         board.ipe.assert_interrupt(&keyboard);
+        board.ipe.assert_interrupt(&disk);
+
+        assert_eq!(7, board.ipe.highest_priority);
+        board.core.process_interrupt(&mut board.ipe);
+        assert_eq!(12, board.core.vector);
+
         assert_eq!(5, board.ipe.highest_priority);
+        board.core.process_interrupt(&mut board.ipe);
+        assert_eq!(15, board.core.vector);
+
+        assert_eq!(2, board.ipe.highest_priority);
+        board.core.process_interrupt(&mut board.ipe);
+        assert_eq!(17, board.core.vector);
+
+        assert_eq!(0, board.ipe.highest_priority);
     }
 }
