@@ -9,12 +9,13 @@ struct Core {
     mask: u8,
     vector: Option<u8>
 }
-
+const SPURIOUS_INTERRUPT: u8 = 0x18;
 impl Core {
     fn process_interrupt(&mut self, int_ctrl: &mut InterruptController) {
         let prio = int_ctrl.highest_priority();
-        self.vector = if prio > self.mask {            
-            Some(int_ctrl.acknowledge_interrupt(prio))
+        self.vector = if prio > self.mask {
+            int_ctrl.acknowledge_interrupt(prio).or(Some(SPURIOUS_INTERRUPT))
+            // Some(int_ctrl.acknowledge_interrupt(prio).unwrap_or(SPURIOUS_INTERRUPT))
         } else {
             None
         }
@@ -23,7 +24,7 @@ impl Core {
 trait InterruptController
 {
     fn highest_priority(&self) -> u8;
-    fn acknowledge_interrupt(&mut self, priority: u8) -> u8;
+    fn acknowledge_interrupt(&mut self, priority: u8) -> Option<u8>;
 }
 
 struct VectoredInterruptController<'a>
@@ -52,15 +53,14 @@ impl<'a> InterruptController for VectoredInterruptController<'a> {
         self.highest_priority
     }
 
-    fn acknowledge_interrupt(&mut self, priority: u8) -> u8 {
+    fn acknowledge_interrupt(&mut self, priority: u8) -> Option<u8> {
         let ip = priority_to_index(priority);
-        match self.asserted[ip] {
-            None => 0x18, // spurious interrupt
-            Some(peripheral) => {
-                self.update_asserted(ip, None);
-                peripheral.vector
-            }
-        }
+        self.asserted[ip].map(|peripheral|
+                {
+                    self.update_asserted(ip, None);
+                    peripheral.vector
+                }
+            )
     }
 }
 
