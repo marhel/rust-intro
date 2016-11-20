@@ -75,6 +75,7 @@ struct Peripheral
 }
 impl Peripheral {
     fn vectored(priority: u8, vector: u8) -> Peripheral {
+        assert!(priority > 0 && priority < 8);
         Peripheral {
             priority: priority,
             autovectored: false,
@@ -82,6 +83,7 @@ impl Peripheral {
         }
     }
     fn vectored_uninitialized(priority: u8) -> Peripheral {
+        assert!(priority > 0 && priority < 8);
         Peripheral {
             priority: priority,
             autovectored: false,
@@ -89,6 +91,7 @@ impl Peripheral {
         }
     }
     fn autovectored(priority: u8) -> Peripheral {
+        assert!(priority > 0 && priority < 8);
         Peripheral {
             priority: priority,
             autovectored: true,
@@ -103,7 +106,8 @@ mod tests {
 
     #[test]
     fn highest_priority_is_processed_first() {
-        let rtc = Peripheral::vectored(7, 12);
+        let rtc_vector = 64;
+        let rtc = Peripheral::vectored(7, rtc_vector);
         let disk = Peripheral::autovectored(5);
         let keyboard = Peripheral::vectored_uninitialized(2);
 
@@ -120,11 +124,11 @@ mod tests {
 
         assert_eq!(7, board.int_ctrl.highest_priority());
         board.core.process_interrupt(board.int_ctrl);
-        assert_eq!(Some(12), board.core.vector);
+        assert_eq!(Some(rtc_vector), board.core.vector);
 
         assert_eq!(5, board.int_ctrl.highest_priority());
         board.core.process_interrupt(board.int_ctrl);
-        assert_eq!(Some(AUTOVECTOR_BASE + 5), board.core.vector);
+        assert_eq!(Some(AUTOVECTOR_BASE + disk.priority), board.core.vector);
 
         assert_eq!(2, board.int_ctrl.highest_priority());
         board.core.process_interrupt(board.int_ctrl);
@@ -133,5 +137,54 @@ mod tests {
         assert_eq!(0, board.int_ctrl.highest_priority());        
         board.core.process_interrupt(board.int_ctrl);
         assert_eq!(None, board.core.vector);
+    }
+
+    struct FakeInterruptController {
+        level: u8
+    }
+    impl FakeInterruptController {
+        fn assert_interrupt(&mut self, irq: u8) -> u8
+        {
+            self.level |= 1 << irq - 1;
+            self.level
+        }
+    }
+    impl InterruptController for FakeInterruptController {
+        fn highest_priority(&self) -> u8 {
+            (8 - self.level.leading_zeros()) as u8
+        }
+
+        fn acknowledge_interrupt(&mut self, priority: u8) -> Option<u8> {
+            self.level &= !(1 << priority - 1);
+            println!("{:b}, {}", self.level, priority);
+            Some(AUTOVECTOR_BASE + priority)
+        }
+    }
+
+    #[test]
+    fn fake_controller() {
+        let mut test_ctrl = FakeInterruptController { level: 0 };
+        test_ctrl.assert_interrupt(2);
+        test_ctrl.assert_interrupt(7);
+        test_ctrl.assert_interrupt(5);
+        let core = Core { mask: 0, vector: None };
+        let mut board = Motherboard { int_ctrl: &mut test_ctrl, core: core };
+
+        assert_eq!(7, board.int_ctrl.highest_priority());
+        board.core.process_interrupt(board.int_ctrl);
+        assert_eq!(Some(AUTOVECTOR_BASE + 7), board.core.vector);
+
+        assert_eq!(5, board.int_ctrl.highest_priority());
+        board.core.process_interrupt(board.int_ctrl);
+        assert_eq!(Some(AUTOVECTOR_BASE + 5), board.core.vector);
+
+        assert_eq!(2, board.int_ctrl.highest_priority());
+        board.core.process_interrupt(board.int_ctrl);
+        assert_eq!(Some(AUTOVECTOR_BASE + 2), board.core.vector);
+
+        assert_eq!(0, board.int_ctrl.highest_priority());        
+        board.core.process_interrupt(board.int_ctrl);
+        assert_eq!(None, board.core.vector);
+
     }
 }
