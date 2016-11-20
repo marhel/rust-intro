@@ -9,13 +9,15 @@ struct Core {
     mask: u8,
     vector: Option<u8>
 }
+const UNINITIALIZED_INTERRUPT: u8 = 0x0F;
 const SPURIOUS_INTERRUPT: u8 = 0x18;
+const AUTOVECTOR_BASE: u8 = 0x18;
+
 impl Core {
     fn process_interrupt(&mut self, int_ctrl: &mut InterruptController) {
         let prio = int_ctrl.highest_priority();
         self.vector = if prio > self.mask {
             int_ctrl.acknowledge_interrupt(prio).or(Some(SPURIOUS_INTERRUPT))
-            // Some(int_ctrl.acknowledge_interrupt(prio).unwrap_or(SPURIOUS_INTERRUPT))
         } else {
             None
         }
@@ -27,7 +29,7 @@ trait InterruptController
     fn acknowledge_interrupt(&mut self, priority: u8) -> Option<u8>;
 }
 
-struct VectoredInterruptController<'a>
+struct PeriperhalInterruptController<'a>
 {
     highest_priority: u8,
     asserted: [Option<&'a Peripheral>; 7]
@@ -36,7 +38,7 @@ struct VectoredInterruptController<'a>
 fn priority_to_index(priority: u8) -> usize {
     7 - priority as usize
 }
-impl<'a> VectoredInterruptController<'a> {
+impl<'a> PeriperhalInterruptController<'a> {
     fn update_asserted(&mut self, index: usize, value: Option<&'a Peripheral>) -> u8 {
         self.asserted[index] = value;
         self.highest_priority = self.asserted.iter().position(|&x| x.is_some()).map(|i| 7-i as u8).unwrap_or(0u8);
@@ -48,7 +50,7 @@ impl<'a> VectoredInterruptController<'a> {
     }
 }
 
-impl<'a> InterruptController for VectoredInterruptController<'a> {
+impl<'a> InterruptController for PeriperhalInterruptController<'a> {
     fn highest_priority(&self) -> u8 {
         self.highest_priority
     }
@@ -58,7 +60,8 @@ impl<'a> InterruptController for VectoredInterruptController<'a> {
         self.asserted[ip].map(|peripheral|
                 {
                     self.update_asserted(ip, None);
-                    peripheral.vector
+                    // use provided vector, or handle as auto vectored or uninitialized vector
+                    peripheral.vector.unwrap_or_else(|| if peripheral.autovectored {AUTOVECTOR_BASE + priority} else {UNINITIALIZED_INTERRUPT})
                 }
             )
     }
@@ -67,25 +70,51 @@ impl<'a> InterruptController for VectoredInterruptController<'a> {
 struct Peripheral
 {
     priority: u8,
-    vector: u8
+    autovectored: bool,
+    vector: Option<u8>
 }
-
+impl Peripheral {
+    fn vectored(priority: u8, vector: u8) -> Peripheral {
+        Peripheral {
+            priority: priority,
+            autovectored: false,
+            vector: Some(vector)
+        }
+    }
+    fn vectored_uninitialized(priority: u8) -> Peripheral {
+        Peripheral {
+            priority: priority,
+            autovectored: false,
+            vector: None
+        }
+    }
+    fn autovectored(priority: u8) -> Peripheral {
+        Peripheral {
+            priority: priority,
+            autovectored: true,
+            vector: None
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
-    use super::{Motherboard, Core, InterruptController, VectoredInterruptController, Peripheral};
+    use super::{Motherboard, Core, InterruptController, PeriperhalInterruptController, Peripheral, 
+        AUTOVECTOR_BASE, UNINITIALIZED_INTERRUPT};
+
     #[test]
     fn highest_priority_is_processed_first() {
-        let rtc = Peripheral { priority : 7, vector: 12 };
-        let disk = Peripheral { priority : 5, vector: 15 };
-        let keyboard = Peripheral { priority : 2, vector: 17 };
+        let rtc = Peripheral::vectored(7, 12);
+        let disk = Peripheral::autovectored(5);
+        let keyboard = Peripheral::vectored_uninitialized(2);
 
-        let mut int_ctrl = VectoredInterruptController {
+        let mut int_ctrl = PeriperhalInterruptController {
             highest_priority: 0, 
             asserted: [None, None, None, None, None, None, None]
         };
         int_ctrl.assert_interrupt(&rtc);
         int_ctrl.assert_interrupt(&keyboard);
         int_ctrl.assert_interrupt(&disk);
+
         let core = Core { mask: 0, vector: None };
         let mut board = Motherboard { int_ctrl: &mut int_ctrl, core: core };
 
@@ -95,11 +124,11 @@ mod tests {
 
         assert_eq!(5, board.int_ctrl.highest_priority());
         board.core.process_interrupt(board.int_ctrl);
-        assert_eq!(Some(15), board.core.vector);
+        assert_eq!(Some(AUTOVECTOR_BASE + 5), board.core.vector);
 
         assert_eq!(2, board.int_ctrl.highest_priority());
         board.core.process_interrupt(board.int_ctrl);
-        assert_eq!(Some(17), board.core.vector);
+        assert_eq!(Some(UNINITIALIZED_INTERRUPT), board.core.vector);
 
         assert_eq!(0, board.int_ctrl.highest_priority());        
         board.core.process_interrupt(board.int_ctrl);
