@@ -2,7 +2,7 @@
 pub mod constants;
 
 struct FakeCore<'a> {
-    mask: u8,
+    irq_mask: u8,
     int_ctrl: &'a mut InterruptController,
     interrupt_return_stack: Vec<u8>,
     vector: Option<u8>
@@ -13,13 +13,13 @@ const AUTOVECTOR_BASE: u8 = 0x18;
 
 impl<'a> FakeCore<'a> {
     fn return_from_interrupt(&mut self) {
-        self.mask = self.interrupt_return_stack.pop().unwrap();
+        self.irq_mask = self.interrupt_return_stack.pop().unwrap();
     }
     fn process_interrupt(&mut self) {
         let prio = self.int_ctrl.highest_priority();
-        self.vector = if prio > self.mask {
-            self.interrupt_return_stack.push(self.mask);
-            self.mask = prio;
+        self.vector = if prio > self.irq_mask {
+            self.interrupt_return_stack.push(self.irq_mask);
+            self.irq_mask = prio;
             self.int_ctrl.acknowledge_interrupt(prio).or(Some(SPURIOUS_INTERRUPT))
         } else {
             None
@@ -160,7 +160,7 @@ mod tests {
         int_ctrl.request_interrupt(&keyboard);
         int_ctrl.request_interrupt(&disk);
 
-        let mut core = FakeCore { int_ctrl: &mut int_ctrl, interrupt_return_stack: Vec::new(), mask: 0, vector: None };
+        let mut core = FakeCore { int_ctrl: &mut int_ctrl, interrupt_return_stack: Vec::new(), irq_mask: 0, vector: None };
 
         assert_eq!(7, core.int_ctrl.highest_priority());
         core.process_interrupt();
@@ -177,7 +177,7 @@ mod tests {
         auto_ctrl.request_interrupt(2);
         auto_ctrl.request_interrupt(7);
         auto_ctrl.request_interrupt(5);
-        let mut core = FakeCore { int_ctrl: &mut auto_ctrl, interrupt_return_stack: Vec::new(), mask: 0, vector: None };
+        let mut core = FakeCore { int_ctrl: &mut auto_ctrl, interrupt_return_stack: Vec::new(), irq_mask: 0, vector: None };
 
         assert_eq!(7, core.int_ctrl.highest_priority());
         core.process_interrupt();
