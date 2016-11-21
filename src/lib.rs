@@ -171,12 +171,12 @@ mod tests {
         let mut core = FakeCore::new(0,0, int_ctrl);
         core.int_ctrl.request_interrupt(&rtc);
         core.int_ctrl.request_interrupt(&keyboard);
-        core.int_ctrl.request_interrupt(&disk);
 
         assert_eq!(7, core.int_ctrl.highest_priority());
         core.process_interrupt();
         assert_eq!(Some(rtc_vector), core.vector);
 
+        core.int_ctrl.request_interrupt(&disk);
         assert_auto(&mut core, 5);
         assert_next(&mut core, 2, Some(UNINITIALIZED_INTERRUPT));
         assert_auto(&mut core, 0);
@@ -188,12 +188,12 @@ mod tests {
         let mut core = FakeCore::new(0,0, auto_ctrl);
         core.int_ctrl.request_interrupt(2);
         core.int_ctrl.request_interrupt(7);
-        core.int_ctrl.request_interrupt(5);
 
         assert_eq!(7, core.int_ctrl.highest_priority());
         core.process_interrupt();
         assert_eq!(Some(AUTOVECTOR_BASE + 7), core.vector);
 
+        core.int_ctrl.request_interrupt(5);
         assert_auto(&mut core, 5);
         assert_auto(&mut core, 2);
         assert_auto(&mut core, 0);
@@ -204,8 +204,12 @@ mod tests {
         let auto_ctrl = AutoInterruptController { level: 0 };
         let mut core = FakeCore::new(6,0, auto_ctrl);
         core.int_ctrl.request_interrupt(2);
-        core.int_ctrl.request_interrupt(5);
 
+        assert_eq!(2, core.int_ctrl.highest_priority());
+        core.process_interrupt();
+        assert_eq!(None, core.vector);
+
+        core.int_ctrl.request_interrupt(5);
         assert_eq!(5, core.int_ctrl.highest_priority());
         core.process_interrupt();
         assert_eq!(None, core.vector);
@@ -215,18 +219,17 @@ mod tests {
     fn nonmaskable_interrupts() {
         let auto_ctrl = AutoInterruptController { level: 0 };
         let mut core = FakeCore::new(7,0, auto_ctrl);
-        core.int_ctrl.request_interrupt(2);
         core.int_ctrl.request_interrupt(7);
 
         assert_eq!(7, core.int_ctrl.highest_priority());
         core.process_interrupt();
         assert_eq!(Some(AUTOVECTOR_BASE + 7), core.vector);
     }
+    
     #[test]
     fn nonmaskable_interrupts_in_progress() {
         let auto_ctrl = AutoInterruptController { level: 0 };
         let mut core = FakeCore::new(7,7, auto_ctrl);
-        core.int_ctrl.request_interrupt(2);
         core.int_ctrl.request_interrupt(7);
 
         assert_eq!(7, core.int_ctrl.highest_priority());
