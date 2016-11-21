@@ -1,7 +1,9 @@
+#![allow(dead_code)]
 pub mod constants;
 
-struct FakeCore {
+struct FakeCore<'a> {
     mask: u8,
+    int_ctrl: &'a mut InterruptController,
     interrupt_return_stack: Vec<u8>,
     vector: Option<u8>
 }
@@ -9,16 +11,16 @@ const UNINITIALIZED_INTERRUPT: u8 = 0x0F;
 const SPURIOUS_INTERRUPT: u8 = 0x18;
 const AUTOVECTOR_BASE: u8 = 0x18;
 
-impl FakeCore {
+impl<'a> FakeCore<'a> {
     fn return_from_interrupt(&mut self) {
         self.mask = self.interrupt_return_stack.pop().unwrap();
     }
-    fn process_interrupt(&mut self, int_ctrl: &mut InterruptController) {
-        let prio = int_ctrl.highest_priority();
+    fn process_interrupt(&mut self) {
+        let prio = self.int_ctrl.highest_priority();
         self.vector = if prio > self.mask {
             self.interrupt_return_stack.push(self.mask);
             self.mask = prio;
-            int_ctrl.acknowledge_interrupt(prio).or(Some(SPURIOUS_INTERRUPT))
+            self.int_ctrl.acknowledge_interrupt(prio).or(Some(SPURIOUS_INTERRUPT))
         } else {
             None
         }
@@ -128,18 +130,18 @@ mod tests {
     use super::{FakeCore, InterruptController, PeriperhalInterruptController, AutoInterruptController, Peripheral, 
         AUTOVECTOR_BASE, UNINITIALIZED_INTERRUPT};
 
-    fn assert_auto(int_ctrl: &mut InterruptController, core: &mut FakeCore, prio: u8) {
-        assert_next(int_ctrl, core, prio, if prio > 0 {Some(AUTOVECTOR_BASE + prio)} else {None})
+    fn assert_auto(core: &mut FakeCore, prio: u8) {
+        assert_next(core, prio, if prio > 0 {Some(AUTOVECTOR_BASE + prio)} else {None})
     }
 
-    fn assert_next(int_ctrl: &mut InterruptController, core: &mut FakeCore, prio: u8, vector: Option<u8>) {
-        assert_eq!(prio, int_ctrl.highest_priority());
+    fn assert_next(core: &mut FakeCore, prio: u8, vector: Option<u8>) {
+        assert_eq!(prio, core.int_ctrl.highest_priority());
         // assume still in higher priority handler
-        core.process_interrupt(int_ctrl);
+        core.process_interrupt();
         assert_eq!(None, core.vector);
         // return from higher priority handler, allow lower prio interrupts
         core.return_from_interrupt();
-        core.process_interrupt(int_ctrl);
+        core.process_interrupt();
         assert_eq!(vector, core.vector);
     }
 
@@ -158,15 +160,15 @@ mod tests {
         int_ctrl.request_interrupt(&keyboard);
         int_ctrl.request_interrupt(&disk);
 
-        let mut core = FakeCore { interrupt_return_stack: Vec::new(), mask: 0, vector: None };
+        let mut core = FakeCore { int_ctrl: &mut int_ctrl, interrupt_return_stack: Vec::new(), mask: 0, vector: None };
 
-        assert_eq!(7, int_ctrl.highest_priority());
-        core.process_interrupt(&mut int_ctrl);
+        assert_eq!(7, core.int_ctrl.highest_priority());
+        core.process_interrupt();
         assert_eq!(Some(rtc_vector), core.vector);
 
-        assert_auto(&mut int_ctrl, &mut core, 5);
-        assert_next(&mut int_ctrl, &mut core, 2, Some(UNINITIALIZED_INTERRUPT));
-        assert_auto(&mut int_ctrl, &mut core, 0);
+        assert_auto(&mut core, 5);
+        assert_next(&mut core, 2, Some(UNINITIALIZED_INTERRUPT));
+        assert_auto(&mut core, 0);
     }
 
     #[test]
@@ -175,14 +177,14 @@ mod tests {
         auto_ctrl.request_interrupt(2);
         auto_ctrl.request_interrupt(7);
         auto_ctrl.request_interrupt(5);
-        let mut core = FakeCore { interrupt_return_stack: Vec::new(), mask: 0, vector: None };
+        let mut core = FakeCore { int_ctrl: &mut auto_ctrl, interrupt_return_stack: Vec::new(), mask: 0, vector: None };
 
-        assert_eq!(7, auto_ctrl.highest_priority());
-        core.process_interrupt(&mut auto_ctrl);
+        assert_eq!(7, core.int_ctrl.highest_priority());
+        core.process_interrupt();
         assert_eq!(Some(AUTOVECTOR_BASE + 7), core.vector);
 
-        assert_auto(&mut auto_ctrl, &mut core, 5);
-        assert_auto(&mut auto_ctrl, &mut core, 2);
-        assert_auto(&mut auto_ctrl, &mut core, 0);
+        assert_auto(&mut core, 5);
+        assert_auto(&mut core, 2);
+        assert_auto(&mut core, 0);
     }
 }
