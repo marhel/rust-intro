@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 pub mod constants;
+pub mod example;
 
 struct FakeCore<T: InterruptController> {
     irq_level: u8,
